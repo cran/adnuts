@@ -1,3 +1,81 @@
+
+
+#' Function to generate random initial values from a previous fit using
+#' adnuts
+#'
+#' @param fit An outputted list from \code{\link{sample_admb}} or
+#'   \code{\link{sample_tmb}}
+#' @param chains The number of chains for the subsequent run, which
+#'   determines the number to return.
+#' @return A list of lists which can be passed back into
+#'   \code{\link{sample_admb}}.
+#' @export
+sample_inits <- function(fit, chains){
+  post <- extract_samples(fit)
+  ind <- sample(1:nrow(post), size=chains)
+  lapply(ind, function(i) as.numeric(post[i,]))
+}
+
+#' Read in admodel.hes file
+#' @param path Path to folder containing the admodel.hes file
+#'
+#' @return The Hessian matrix
+.getADMBHessian <- function(path){
+  ## This function reads in all of the information contained in the
+  ## admodel.hes file. Some of this is needed for relaxing the
+  ## covariance matrix, and others just need to be recorded and
+  ## rewritten to file so ADMB "sees" what it's expecting.
+  filename <- file.path(path, "admodel.hes")
+  if(!file.exists(filename))
+    stop(paste0("admodel.hes not found: ", filename))
+  f <- file(filename, "rb")
+  on.exit(close(f))
+  num.pars <- readBin(f, "integer", 1)
+  hes.vec <- readBin(f, "numeric", num.pars^2)
+  hes <- matrix(hes.vec, ncol=num.pars, nrow=num.pars)
+  hybrid_bounded_flag <- readBin(f, "integer", 1)
+  scale <- readBin(f, "numeric", num.pars)
+  return(hes)
+}
+
+
+#' Check identifiability from model Hessian
+#'
+#' @param path Path to model folder, defaults to working directory
+#' @param model Model name without file extension
+#' @details Read in the admodel.hes file and check the eigenvalues to
+#'   determine which parameters are not identifiable and thus cause the
+#'   Hessian to be non-invertible. Use this to identify which parameters
+#'   are problematic. This function was converted from a version in the
+#'   \code{FishStatsUtils} package.
+#' @return Prints output of bad parameters and invisibly returns it.
+#' @export
+check_identifiable <- function(model, path=getwd()){
+  ## Check eigendecomposition
+  fit <- .read_mle_fit(model, path)
+  hes <- .getADMBHessian(path)
+  ev  <-  eigen(hes)
+  WhichBad <-  which( ev$values < sqrt(.Machine$double.eps) )
+  if(length(WhichBad)==0){
+    message( "All parameters are identifiable" )
+  } else {
+    ## Check for parameters
+    if(length(WhichBad==1)){
+      RowMax <- abs(ev$vectors[,WhichBad])
+    } else {
+      RowMax  <-  apply(ev$vectors[, WhichBad], MARGIN=1, FUN=function(vec){max(abs(vec))} )
+    }
+    bad <- data.frame(ParNum=1:nrow(hes), Param=fit$par.names,
+                      MLE=fit$est[1:nrow(hes)],
+                      Param_check=ifelse(RowMax>0.1, "Bad","OK"))
+    row.names(bad) <- NULL
+    bad <- bad[bad$Param_check=='Bad',]
+    print(bad)
+    return(invisible(bad))
+  }
+}
+
+
 ## Read in PSV file
 .get_psv <- function(model){
       if(!file.exists(paste0(model, '.psv'))){

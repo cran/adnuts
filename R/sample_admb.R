@@ -68,6 +68,15 @@ sample_admb <-
   stopifnot(thin >=1); stopifnot(chains >= 1)
   if(is.null(seeds)) seeds <- sample.int(1e7, size=chains)
   if(iter < 10 | !is.numeric(iter)) stop("iter must be > 10")
+  ## Catch path and model name errors early
+  stopifnot(is.character(path)); stopifnot(is.character(model))
+  if(!dir.exists(path)) stop(paste('Folder', path, 'does not exist. Check argument \'path\''))
+  if (.Platform$OS.type=="windows") {
+    ff <- file.path(path, paste(model,".exe",sep=""))
+  } else {
+    ff <- file.path(path, paste("./",model,sep=""))
+  }
+  if(!file.exists(ff)) stop(paste('File', ff, 'not found. Check \'path\' and \'model\' arguments'))
   ## Update control with defaults
   control <- .update_control(control)
   if(is.null(warmup)) warmup <- floor(iter/2)
@@ -203,7 +212,7 @@ sample_admb_nuts <- function(path, model, iter=2000,
   adapt_mass <- control$adapt_mass
 
   ## Build the command to run the model
-  cmd <- paste(model,"-nox -noest -nohess -nuts -mcmc ",iter)
+  cmd <- paste(model,"-nox -nohess -maxfn 0 -phase 1000 -nuts -mcmc ",iter)
   cmd <- paste(cmd, "-warmup", warmup, "-chain", chain)
   if(!is.null(seed)) cmd <- paste(cmd, "-mcseed", seed)
   if(!is.null(duration)) cmd <- paste(cmd, "-duration", duration)
@@ -220,6 +229,8 @@ sample_admb_nuts <- function(path, model, iter=2000,
     cmd <- paste(cmd, '-adapt_mass')
   } else if(is.matrix(metric)){
     ## User defined one will be writen to admodel.cov
+    if(!requireNamespace("matrixcalc", quietly = TRUE))
+      stop("Package matrixcalc required to pass a matrix")
     cor.user <- metric/ sqrt(diag(metric) %o% diag(metric))
     if(!matrixcalc::is.positive.definite(x=cor.user))
       stop("Invalid mass matrix, not positive definite")
@@ -245,16 +256,15 @@ sample_admb_nuts <- function(path, model, iter=2000,
     cmd <- paste(cmd, "-mcpin init.pin")
     write.table(file="init.pin", x=unlist(init), row.names=F, col.names=F)
   } else {
-    ## Use MLE values from the model.par file
-    f <- paste0(model, '.par')
-    if(!file.exists(f))
-      stop(paste("File", f, "doesn't exist, rerun model or specify inits manually"))
-    cmd <- paste(cmd, "-mcpin",f)
+    ## Use MLE values which are read in from the admodel.hes file
+    ## which is the default behavior
   }
   if(!is.null(extra.args)) cmd <- paste(cmd, extra.args)
 
   ## Run it and get results
   time <- system.time(system(cmd, ignore.stdout=!verbose))[3]
+  if(!file.exists('adaptation.csv'))
+    stop("NUTS output files missing. Check that ADMB version >= 12.0.")
   sampler_params<- as.matrix(read.csv("adaptation.csv"))
   unbounded <- as.matrix(read.csv("unbounded.csv", header=FALSE))
   dimnames(unbounded) <- NULL
@@ -299,7 +309,7 @@ sample_admb_rwm <-
     if(thin < 1 | thin > iter) stop("Thin must be >1 and < iter")
 
     ## Build the command to run the model
-    cmd <- paste(model,"-nox -noest -nohess -rwm -mcmc",iter)
+    cmd <- paste(model,"-nox -maxfn 0 -phase 1000 -nohess -rwm -mcmc",iter)
     cmd <- paste(cmd, "-mcscale", warmup, "-chain", chain)
     if(!is.null(seed)) cmd <- paste(cmd, "-mcseed", seed)
     if(!is.null(duration)) cmd <- paste(cmd, "-duration", duration)
